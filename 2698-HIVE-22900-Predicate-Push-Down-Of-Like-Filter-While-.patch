@@ -1,0 +1,580 @@
+From 3090bedb72402b5a47fdf261de4959bb8b2116e8 Mon Sep 17 00:00:00 2001
+From: Syed Shameerur Rahman <srahman@qubole.com>
+Date: Fri, 28 Feb 2020 10:47:31 -0800
+Subject: [PATCH 2698/5664] HIVE-22900: Predicate Push Down Of Like Filter
+ While Fetching Partition Data From MetaStore (Syed Shameerur Rahman, reviewed
+ by Jesus Camacho Rodriguez)
+
+Close apache/hive#916
+---
+ .../test/queries/clientpositive/ppd_like_filter.q  |  32 +++
+ .../results/clientpositive/ppd_like_filter.q.out   | 258 +++++++++++++++++++++
+ .../hadoop/hive/metastore/MetaStoreDirectSql.java  |  10 +-
+ .../hadoop/hive/metastore/PartFilterExprUtil.java  |  29 +--
+ .../hive/metastore/parser/ExpressionTree.java      |  30 ++-
+ .../hadoop/hive/metastore/TestHiveMetaStore.java   |  69 +++++-
+ .../hive/metastore/client/TestListPartitions.java  |   6 +-
+ 7 files changed, 391 insertions(+), 43 deletions(-)
+ create mode 100644 ql/src/test/queries/clientpositive/ppd_like_filter.q
+ create mode 100644 ql/src/test/results/clientpositive/ppd_like_filter.q.out
+
+diff --git a/ql/src/test/queries/clientpositive/ppd_like_filter.q b/ql/src/test/queries/clientpositive/ppd_like_filter.q
+new file mode 100644
+index 0000000..f9a8fc1
+--- /dev/null
++++ b/ql/src/test/queries/clientpositive/ppd_like_filter.q
+@@ -0,0 +1,32 @@
++CREATE TABLE test_tbl (a int) PARTITIONED BY (b string);
++
++INSERT INTO test_tbl PARTITION(b="abc") VALUES (1);
++INSERT INTO test_tbl PARTITION(b="d_\\%ae") VALUES (1);
++INSERT INTO test_tbl PARTITION(b="af%") VALUES (1);
++
++select * from test_tbl where b like 'a%';
++select * from test_tbl where b like '%a%';
++select * from test_tbl where b like '%a';
++select * from test_tbl where b like '%a';
++
++select * from test_tbl where b like 'a%c';
++select * from test_tbl where b like '%a%c%';
++select * from test_tbl where b like '%_b%';
++select * from test_tbl where b like '%b_';
++
++select * from test_tbl where b like '%c';
++select * from test_tbl where b like '%c%';
++select * from test_tbl where b like 'c%';
++select * from test_tbl where b like '%\_%';
++
++select * from test_tbl where b like '%\\%%';
++select * from test_tbl where b like 'abc';
++select * from test_tbl where b like '%';
++select * from test_tbl where b like '_';
++
++select * from test_tbl where b like '___';
++select * from test_tbl where b like '%%%';
++select * from test_tbl where b like '%\\\\%';
++
++
++
+diff --git a/ql/src/test/results/clientpositive/ppd_like_filter.q.out b/ql/src/test/results/clientpositive/ppd_like_filter.q.out
+new file mode 100644
+index 0000000..125f7bb
+--- /dev/null
++++ b/ql/src/test/results/clientpositive/ppd_like_filter.q.out
+@@ -0,0 +1,258 @@
++PREHOOK: query: CREATE TABLE test_tbl (a int) PARTITIONED BY (b string)
++PREHOOK: type: CREATETABLE
++PREHOOK: Output: database:default
++PREHOOK: Output: default@test_tbl
++POSTHOOK: query: CREATE TABLE test_tbl (a int) PARTITIONED BY (b string)
++POSTHOOK: type: CREATETABLE
++POSTHOOK: Output: database:default
++POSTHOOK: Output: default@test_tbl
++PREHOOK: query: INSERT INTO test_tbl PARTITION(b="abc") VALUES (1)
++PREHOOK: type: QUERY
++PREHOOK: Input: _dummy_database@_dummy_table
++PREHOOK: Output: default@test_tbl@b=abc
++POSTHOOK: query: INSERT INTO test_tbl PARTITION(b="abc") VALUES (1)
++POSTHOOK: type: QUERY
++POSTHOOK: Input: _dummy_database@_dummy_table
++POSTHOOK: Output: default@test_tbl@b=abc
++POSTHOOK: Lineage: test_tbl PARTITION(b=abc).a SCRIPT []
++PREHOOK: query: INSERT INTO test_tbl PARTITION(b="d_\\%ae") VALUES (1)
++PREHOOK: type: QUERY
++PREHOOK: Input: _dummy_database@_dummy_table
++PREHOOK: Output: default@test_tbl@b=d_%5C%25ae
++POSTHOOK: query: INSERT INTO test_tbl PARTITION(b="d_\\%ae") VALUES (1)
++POSTHOOK: type: QUERY
++POSTHOOK: Input: _dummy_database@_dummy_table
++POSTHOOK: Output: default@test_tbl@b=d_%5C%25ae
++POSTHOOK: Lineage: test_tbl PARTITION(b=d_\%ae).a SCRIPT []
++PREHOOK: query: INSERT INTO test_tbl PARTITION(b="af%") VALUES (1)
++PREHOOK: type: QUERY
++PREHOOK: Input: _dummy_database@_dummy_table
++PREHOOK: Output: default@test_tbl@b=af%25
++POSTHOOK: query: INSERT INTO test_tbl PARTITION(b="af%") VALUES (1)
++POSTHOOK: type: QUERY
++POSTHOOK: Input: _dummy_database@_dummy_table
++POSTHOOK: Output: default@test_tbl@b=af%25
++POSTHOOK: Lineage: test_tbl PARTITION(b=af%).a SCRIPT []
++PREHOOK: query: select * from test_tbl where b like 'a%'
++PREHOOK: type: QUERY
++PREHOOK: Input: default@test_tbl
++PREHOOK: Input: default@test_tbl@b=abc
++PREHOOK: Input: default@test_tbl@b=af%25
++#### A masked pattern was here ####
++POSTHOOK: query: select * from test_tbl where b like 'a%'
++POSTHOOK: type: QUERY
++POSTHOOK: Input: default@test_tbl
++POSTHOOK: Input: default@test_tbl@b=abc
++POSTHOOK: Input: default@test_tbl@b=af%25
++#### A masked pattern was here ####
++1	abc
++1	af%
++PREHOOK: query: select * from test_tbl where b like '%a%'
++PREHOOK: type: QUERY
++PREHOOK: Input: default@test_tbl
++PREHOOK: Input: default@test_tbl@b=abc
++PREHOOK: Input: default@test_tbl@b=af%25
++PREHOOK: Input: default@test_tbl@b=d_%5C%25ae
++#### A masked pattern was here ####
++POSTHOOK: query: select * from test_tbl where b like '%a%'
++POSTHOOK: type: QUERY
++POSTHOOK: Input: default@test_tbl
++POSTHOOK: Input: default@test_tbl@b=abc
++POSTHOOK: Input: default@test_tbl@b=af%25
++POSTHOOK: Input: default@test_tbl@b=d_%5C%25ae
++#### A masked pattern was here ####
++1	abc
++1	af%
++1	d_\%ae
++PREHOOK: query: select * from test_tbl where b like '%a'
++PREHOOK: type: QUERY
++PREHOOK: Input: default@test_tbl
++#### A masked pattern was here ####
++POSTHOOK: query: select * from test_tbl where b like '%a'
++POSTHOOK: type: QUERY
++POSTHOOK: Input: default@test_tbl
++#### A masked pattern was here ####
++PREHOOK: query: select * from test_tbl where b like '%a'
++PREHOOK: type: QUERY
++PREHOOK: Input: default@test_tbl
++#### A masked pattern was here ####
++POSTHOOK: query: select * from test_tbl where b like '%a'
++POSTHOOK: type: QUERY
++POSTHOOK: Input: default@test_tbl
++#### A masked pattern was here ####
++PREHOOK: query: select * from test_tbl where b like 'a%c'
++PREHOOK: type: QUERY
++PREHOOK: Input: default@test_tbl
++PREHOOK: Input: default@test_tbl@b=abc
++#### A masked pattern was here ####
++POSTHOOK: query: select * from test_tbl where b like 'a%c'
++POSTHOOK: type: QUERY
++POSTHOOK: Input: default@test_tbl
++POSTHOOK: Input: default@test_tbl@b=abc
++#### A masked pattern was here ####
++1	abc
++PREHOOK: query: select * from test_tbl where b like '%a%c%'
++PREHOOK: type: QUERY
++PREHOOK: Input: default@test_tbl
++PREHOOK: Input: default@test_tbl@b=abc
++#### A masked pattern was here ####
++POSTHOOK: query: select * from test_tbl where b like '%a%c%'
++POSTHOOK: type: QUERY
++POSTHOOK: Input: default@test_tbl
++POSTHOOK: Input: default@test_tbl@b=abc
++#### A masked pattern was here ####
++1	abc
++PREHOOK: query: select * from test_tbl where b like '%_b%'
++PREHOOK: type: QUERY
++PREHOOK: Input: default@test_tbl
++PREHOOK: Input: default@test_tbl@b=abc
++#### A masked pattern was here ####
++POSTHOOK: query: select * from test_tbl where b like '%_b%'
++POSTHOOK: type: QUERY
++POSTHOOK: Input: default@test_tbl
++POSTHOOK: Input: default@test_tbl@b=abc
++#### A masked pattern was here ####
++1	abc
++PREHOOK: query: select * from test_tbl where b like '%b_'
++PREHOOK: type: QUERY
++PREHOOK: Input: default@test_tbl
++PREHOOK: Input: default@test_tbl@b=abc
++#### A masked pattern was here ####
++POSTHOOK: query: select * from test_tbl where b like '%b_'
++POSTHOOK: type: QUERY
++POSTHOOK: Input: default@test_tbl
++POSTHOOK: Input: default@test_tbl@b=abc
++#### A masked pattern was here ####
++1	abc
++PREHOOK: query: select * from test_tbl where b like '%c'
++PREHOOK: type: QUERY
++PREHOOK: Input: default@test_tbl
++PREHOOK: Input: default@test_tbl@b=abc
++#### A masked pattern was here ####
++POSTHOOK: query: select * from test_tbl where b like '%c'
++POSTHOOK: type: QUERY
++POSTHOOK: Input: default@test_tbl
++POSTHOOK: Input: default@test_tbl@b=abc
++#### A masked pattern was here ####
++1	abc
++PREHOOK: query: select * from test_tbl where b like '%c%'
++PREHOOK: type: QUERY
++PREHOOK: Input: default@test_tbl
++PREHOOK: Input: default@test_tbl@b=abc
++#### A masked pattern was here ####
++POSTHOOK: query: select * from test_tbl where b like '%c%'
++POSTHOOK: type: QUERY
++POSTHOOK: Input: default@test_tbl
++POSTHOOK: Input: default@test_tbl@b=abc
++#### A masked pattern was here ####
++1	abc
++PREHOOK: query: select * from test_tbl where b like 'c%'
++PREHOOK: type: QUERY
++PREHOOK: Input: default@test_tbl
++#### A masked pattern was here ####
++POSTHOOK: query: select * from test_tbl where b like 'c%'
++POSTHOOK: type: QUERY
++POSTHOOK: Input: default@test_tbl
++#### A masked pattern was here ####
++PREHOOK: query: select * from test_tbl where b like '%\_%'
++PREHOOK: type: QUERY
++PREHOOK: Input: default@test_tbl
++PREHOOK: Input: default@test_tbl@b=d_%5C%25ae
++#### A masked pattern was here ####
++POSTHOOK: query: select * from test_tbl where b like '%\_%'
++POSTHOOK: type: QUERY
++POSTHOOK: Input: default@test_tbl
++POSTHOOK: Input: default@test_tbl@b=d_%5C%25ae
++#### A masked pattern was here ####
++1	d_\%ae
++PREHOOK: query: select * from test_tbl where b like '%\\%%'
++PREHOOK: type: QUERY
++PREHOOK: Input: default@test_tbl
++PREHOOK: Input: default@test_tbl@b=af%25
++PREHOOK: Input: default@test_tbl@b=d_%5C%25ae
++#### A masked pattern was here ####
++POSTHOOK: query: select * from test_tbl where b like '%\\%%'
++POSTHOOK: type: QUERY
++POSTHOOK: Input: default@test_tbl
++POSTHOOK: Input: default@test_tbl@b=af%25
++POSTHOOK: Input: default@test_tbl@b=d_%5C%25ae
++#### A masked pattern was here ####
++1	af%
++1	d_\%ae
++PREHOOK: query: select * from test_tbl where b like 'abc'
++PREHOOK: type: QUERY
++PREHOOK: Input: default@test_tbl
++PREHOOK: Input: default@test_tbl@b=abc
++#### A masked pattern was here ####
++POSTHOOK: query: select * from test_tbl where b like 'abc'
++POSTHOOK: type: QUERY
++POSTHOOK: Input: default@test_tbl
++POSTHOOK: Input: default@test_tbl@b=abc
++#### A masked pattern was here ####
++1	abc
++PREHOOK: query: select * from test_tbl where b like '%'
++PREHOOK: type: QUERY
++PREHOOK: Input: default@test_tbl
++PREHOOK: Input: default@test_tbl@b=abc
++PREHOOK: Input: default@test_tbl@b=af%25
++PREHOOK: Input: default@test_tbl@b=d_%5C%25ae
++#### A masked pattern was here ####
++POSTHOOK: query: select * from test_tbl where b like '%'
++POSTHOOK: type: QUERY
++POSTHOOK: Input: default@test_tbl
++POSTHOOK: Input: default@test_tbl@b=abc
++POSTHOOK: Input: default@test_tbl@b=af%25
++POSTHOOK: Input: default@test_tbl@b=d_%5C%25ae
++#### A masked pattern was here ####
++1	abc
++1	af%
++1	d_\%ae
++PREHOOK: query: select * from test_tbl where b like '_'
++PREHOOK: type: QUERY
++PREHOOK: Input: default@test_tbl
++#### A masked pattern was here ####
++POSTHOOK: query: select * from test_tbl where b like '_'
++POSTHOOK: type: QUERY
++POSTHOOK: Input: default@test_tbl
++#### A masked pattern was here ####
++PREHOOK: query: select * from test_tbl where b like '___'
++PREHOOK: type: QUERY
++PREHOOK: Input: default@test_tbl
++PREHOOK: Input: default@test_tbl@b=abc
++PREHOOK: Input: default@test_tbl@b=af%25
++#### A masked pattern was here ####
++POSTHOOK: query: select * from test_tbl where b like '___'
++POSTHOOK: type: QUERY
++POSTHOOK: Input: default@test_tbl
++POSTHOOK: Input: default@test_tbl@b=abc
++POSTHOOK: Input: default@test_tbl@b=af%25
++#### A masked pattern was here ####
++1	abc
++1	af%
++PREHOOK: query: select * from test_tbl where b like '%%%'
++PREHOOK: type: QUERY
++PREHOOK: Input: default@test_tbl
++PREHOOK: Input: default@test_tbl@b=abc
++PREHOOK: Input: default@test_tbl@b=af%25
++PREHOOK: Input: default@test_tbl@b=d_%5C%25ae
++#### A masked pattern was here ####
++POSTHOOK: query: select * from test_tbl where b like '%%%'
++POSTHOOK: type: QUERY
++POSTHOOK: Input: default@test_tbl
++POSTHOOK: Input: default@test_tbl@b=abc
++POSTHOOK: Input: default@test_tbl@b=af%25
++POSTHOOK: Input: default@test_tbl@b=d_%5C%25ae
++#### A masked pattern was here ####
++1	abc
++1	af%
++1	d_\%ae
++PREHOOK: query: select * from test_tbl where b like '%\\\\%'
++PREHOOK: type: QUERY
++PREHOOK: Input: default@test_tbl
++PREHOOK: Input: default@test_tbl@b=d_%5C%25ae
++#### A masked pattern was here ####
++POSTHOOK: query: select * from test_tbl where b like '%\\\\%'
++POSTHOOK: type: QUERY
++POSTHOOK: Input: default@test_tbl
++POSTHOOK: Input: default@test_tbl@b=d_%5C%25ae
++#### A masked pattern was here ####
+diff --git a/standalone-metastore/metastore-server/src/main/java/org/apache/hadoop/hive/metastore/MetaStoreDirectSql.java b/standalone-metastore/metastore-server/src/main/java/org/apache/hadoop/hive/metastore/MetaStoreDirectSql.java
+index 7dfa594..23fcc13 100644
+--- a/standalone-metastore/metastore-server/src/main/java/org/apache/hadoop/hive/metastore/MetaStoreDirectSql.java
++++ b/standalone-metastore/metastore-server/src/main/java/org/apache/hadoop/hive/metastore/MetaStoreDirectSql.java
+@@ -1108,15 +1108,10 @@ public static FilterType fromClass(Object value) {
+ 
+     @Override
+     public void visit(LeafNode node) throws MetaException {
+-      if (node.operator == Operator.LIKE) {
+-        filterBuffer.setError("LIKE is not supported for SQL filter pushdown");
+-        return;
+-      }
+       int partColCount = table.getPartitionKeys().size();
+       int partColIndex = node.getPartColIndexForFilter(table, filterBuffer);
+       if (filterBuffer.hasError()) return;
+ 
+-      // We skipped 'like', other ops should all work as long as the types are right.
+       String colTypeStr = table.getPartitionKeys().get(partColIndex).getType();
+       FilterType colType = FilterType.fromType(colTypeStr);
+       if (colType == FilterType.Invalid) {
+@@ -1222,6 +1217,11 @@ public void visit(LeafNode node) throws MetaException {
+         params.add(nodeValue);
+       }
+ 
++      // The following syntax is required for using LIKE clause wildcards '_' and '%' as literals.
++      if (node.operator == Operator.LIKE) {
++        nodeValue0 = nodeValue0 + " ESCAPE '\\' ";
++      }
++
+       filterBuffer.append(node.isReverseOrder
+           ? "(" + nodeValue0 + " " + node.operator.getSqlOp() + " " + tableValue + ")"
+           : "(" + tableValue + " " + node.operator.getSqlOp() + " " + nodeValue0 + ")");
+diff --git a/standalone-metastore/metastore-server/src/main/java/org/apache/hadoop/hive/metastore/PartFilterExprUtil.java b/standalone-metastore/metastore-server/src/main/java/org/apache/hadoop/hive/metastore/PartFilterExprUtil.java
+index 8b5354d..809d310 100644
+--- a/standalone-metastore/metastore-server/src/main/java/org/apache/hadoop/hive/metastore/PartFilterExprUtil.java
++++ b/standalone-metastore/metastore-server/src/main/java/org/apache/hadoop/hive/metastore/PartFilterExprUtil.java
+@@ -31,8 +31,6 @@
+ import org.apache.hadoop.hive.metastore.parser.FilterLexer;
+ import org.apache.hadoop.hive.metastore.parser.FilterParser;
+ import org.apache.hadoop.hive.metastore.parser.ExpressionTree.ANTLRNoCaseStringStream;
+-import org.apache.hadoop.hive.metastore.parser.ExpressionTree.LeafNode;
+-import org.apache.hadoop.hive.metastore.parser.ExpressionTree.Operator;
+ 
+ /**
+  * Utility functions for working with partition filter expressions
+@@ -115,32 +113,7 @@ private static ExpressionTree makeExpressionTree(String filter) throws MetaExcep
+       LOG.info("Unable to make the expression tree from expression string ["
+           + filter + "]" + ex.getMessage()); // Don't log the stack, this is normal.
+     }
+-    if (tree == null) {
+-      return null;
+-    }
+-    // We suspect that LIKE pushdown into JDO is invalid; see HIVE-5134. Check for like here.
+-    LikeChecker lc = new LikeChecker();
+-    tree.accept(lc);
+-    return lc.hasLike() ? null : tree;
+-  }
+-
+-
+-  private static class LikeChecker extends ExpressionTree.TreeVisitor {
+-    private boolean hasLike;
+-
+-    public boolean hasLike() {
+-      return hasLike;
+-    }
+-
+-    @Override
+-    protected boolean shouldStop() {
+-      return hasLike;
+-    }
+-
+-    @Override
+-    protected void visit(LeafNode node) throws MetaException {
+-      hasLike = hasLike || (node.operator == Operator.LIKE);
+-    }
++    return tree;
+   }
+ 
+   public static FilterParser getFilterParser(String filter) throws MetaException {
+diff --git a/standalone-metastore/metastore-server/src/main/java/org/apache/hadoop/hive/metastore/parser/ExpressionTree.java b/standalone-metastore/metastore-server/src/main/java/org/apache/hadoop/hive/metastore/parser/ExpressionTree.java
+index 32267b4..9834883 100644
+--- a/standalone-metastore/metastore-server/src/main/java/org/apache/hadoop/hive/metastore/parser/ExpressionTree.java
++++ b/standalone-metastore/metastore-server/src/main/java/org/apache/hadoop/hive/metastore/parser/ExpressionTree.java
+@@ -357,7 +357,11 @@ private void generateJDOFilterOverPartitions(Configuration conf, Table table,
+       if (filterBuilder.hasError()) return;
+ 
+       String paramName = PARAM_PREFIX + params.size();
+-      params.put(paramName, valueAsString);
++      if (operator == Operator.LIKE) {
++        params.put(paramName, makeJdoFilterForLike(valueAsString));
++      } else {
++        params.put(paramName, valueAsString);
++      }
+ 
+       boolean isOpEquals = operator == Operator.EQUALS;
+       if (isOpEquals || operator == Operator.NOTEQUALS || operator == Operator.NOTEQUALS2) {
+@@ -384,6 +388,30 @@ private void generateJDOFilterOverPartitions(Configuration conf, Table table,
+       }
+     }
+ 
++    private static String makeJdoFilterForLike(String likePattern) {
++      StringBuilder sb = new StringBuilder();
++      for (int i = 0; i < likePattern.length(); i++) {
++        // Make a special case for "\\_" and "\\%"
++        char n = likePattern.charAt(i);
++        if (n == '\\'
++            && i + 1 < likePattern.length()
++            && (likePattern.charAt(i + 1) == '_' || likePattern.charAt(i + 1) == '%')) {
++          sb.append(likePattern.charAt(i + 1));
++          i++;
++          continue;
++        }
++
++        if (n == '_') {
++          sb.append(".");
++        } else if (n == '%') {
++          sb.append(".*");
++        } else {
++          sb.append(likePattern.charAt(i));
++        }
++      }
++      return sb.toString();
++    }
++
+     /**
+      * @return true iff filter pushdown for this operator can be done for integral types.
+      */
+diff --git a/standalone-metastore/metastore-server/src/test/java/org/apache/hadoop/hive/metastore/TestHiveMetaStore.java b/standalone-metastore/metastore-server/src/test/java/org/apache/hadoop/hive/metastore/TestHiveMetaStore.java
+index 4508e05..40a4ef6 100644
+--- a/standalone-metastore/metastore-server/src/test/java/org/apache/hadoop/hive/metastore/TestHiveMetaStore.java
++++ b/standalone-metastore/metastore-server/src/test/java/org/apache/hadoop/hive/metastore/TestHiveMetaStore.java
+@@ -2278,8 +2278,8 @@ public void testPartitionFilter() throws Exception {
+     checkFilter(client, dbName, tblName, "p1 >= \"p12\"", 4);
+     checkFilter(client, dbName, tblName, "p1 < \"p12\"", 2);
+     checkFilter(client, dbName, tblName, "p1 <= \"p12\"", 4);
+-    checkFilter(client, dbName, tblName, "p1 like \"p1.*\"", 6);
+-    checkFilter(client, dbName, tblName, "p2 like \"p.*3\"", 1);
++    checkFilter(client, dbName, tblName, "p1 like \"p1%\"", 6);
++    checkFilter(client, dbName, tblName, "p2 like \"p%3\"", 1);
+ 
+     // Test gt/lt/lte/gte for numbers.
+     checkFilter(client, dbName, tblName, "p3 < 0", 1);
+@@ -2400,8 +2400,8 @@ public void testFilterSinglePartition() throws Exception {
+       checkFilter(client, dbName, tblName, "p1 >= \"p12\"", 2);
+       checkFilter(client, dbName, tblName, "p1 <= \"p12\"", 2);
+       checkFilter(client, dbName, tblName, "p1 <> \"p12\"", 2);
+-      checkFilter(client, dbName, tblName, "p1 like \"p1.*\"", 3);
+-      checkFilter(client, dbName, tblName, "p1 like \"p.*2\"", 1);
++      checkFilter(client, dbName, tblName, "p1 like \"p1%\"", 3);
++      checkFilter(client, dbName, tblName, "p1 like \"p%2\"", 1);
+ 
+       client.dropTable(dbName, tblName);
+       client.dropDatabase(dbName);
+@@ -2451,8 +2451,6 @@ public void testFilterLastPartition() throws Exception {
+       checkFilter(client, dbName, tblName, "p2 <= \"p21\"", 2);
+       checkFilter(client, dbName, tblName, "p2 <> \"p12\"", 3);
+       checkFilter(client, dbName, tblName, "p2 != \"p12\"", 3);
+-      checkFilter(client, dbName, tblName, "p2 like \"p2.*\"", 3);
+-      checkFilter(client, dbName, tblName, "p2 like \"p.*2\"", 1);
+ 
+       try {
+         checkFilter(client, dbName, tblName, "p2 !< 'dd'", 0);
+@@ -2464,6 +2462,65 @@ public void testFilterLastPartition() throws Exception {
+       cleanUp(dbName, tblName, null);
+   }
+ 
++  /**
++   * Test "like" filtering on table with single partition.
++   */
++  @Test
++  public void testPartitionFilterLike() throws Exception {
++    String dbName = "filterdb";
++    String tblName = "filtertbl";
++
++    List<String> vals = new ArrayList<>(1);
++    vals.add("abc");
++    List <String> vals2 = new ArrayList<>(1);
++    vals2.add("d_\\\\%ae");
++    List <String> vals3 = new ArrayList<>(1);
++    vals3.add("af%");
++
++    silentDropDatabase(dbName);
++
++    new DatabaseBuilder()
++        .setName(dbName)
++        .create(client, conf);
++
++    Table tbl = new TableBuilder()
++        .setDbName(dbName)
++        .setTableName(tblName)
++        .addCol("c1", ColumnType.STRING_TYPE_NAME)
++        .addCol("c2", ColumnType.INT_TYPE_NAME)
++        .addPartCol("p1", ColumnType.STRING_TYPE_NAME)
++        .create(client, conf);
++
++    tbl = client.getTable(dbName, tblName);
++
++    add_partition(client, tbl, vals, "part1");
++    add_partition(client, tbl, vals2, "part2");
++    add_partition(client, tbl, vals3, "part3");
++
++    checkFilter(client, dbName, tblName, "p1 like \"a%\"", 2);
++    checkFilter(client, dbName, tblName, "p1 like \"%a%\"", 3);
++    checkFilter(client, dbName, tblName, "p1 like \"%a\"", 0);
++    checkFilter(client, dbName, tblName, "p1 like \"a%c\"", 1);
++    checkFilter(client, dbName, tblName, "p1 like \"%a%c%\"", 1);
++    checkFilter(client, dbName, tblName, "p1 like \"%_b%\"", 1);
++    checkFilter(client, dbName, tblName, "p1 like \"%b_\"", 1);
++    checkFilter(client, dbName, tblName, "p1 like \"%c\"", 1);
++    checkFilter(client, dbName, tblName, "p1 like \"%c%\"", 1);
++    checkFilter(client, dbName, tblName, "p1 like \"c%\"", 0);
++    checkFilter(client, dbName, tblName, "p1 like \"%\\_%\"", 1);
++    checkFilter(client, dbName, tblName, "p1 like \"%\\%%\"", 2);
++    checkFilter(client, dbName, tblName, "p1 like \"abc\"", 1);
++    checkFilter(client, dbName, tblName, "p1 like \"%\"", 3);
++    checkFilter(client, dbName, tblName, "p1 like \"_\"", 0);
++    checkFilter(client, dbName, tblName, "p1 like \"___\"", 2);
++    checkFilter(client, dbName, tblName, "p1 like \"%%%\"", 3);
++    checkFilter(client, dbName, tblName, "p1 like \"%\\\\\\\\%\"", 1);
++
++    client.dropTable(dbName, tblName);
++    client.dropDatabase(dbName);
++  }
++
++
+   private void checkFilter(HiveMetaStoreClient client, String dbName,
+         String tblName, String filter, int expectedCount) throws TException {
+     LOG.debug("Testing filter: " + filter);
+diff --git a/standalone-metastore/metastore-server/src/test/java/org/apache/hadoop/hive/metastore/client/TestListPartitions.java b/standalone-metastore/metastore-server/src/test/java/org/apache/hadoop/hive/metastore/client/TestListPartitions.java
+index 242955c..d462eee 100644
+--- a/standalone-metastore/metastore-server/src/test/java/org/apache/hadoop/hive/metastore/client/TestListPartitions.java
++++ b/standalone-metastore/metastore-server/src/test/java/org/apache/hadoop/hive/metastore/client/TestListPartitions.java
+@@ -815,11 +815,11 @@ public void testListPartitionsByFilterCaseInsensitive() throws Exception {
+     assertPartitionsHaveCorrectValues(partitions, testValues.subList(4, 5));
+ 
+     partitions = client.listPartitionsByFilter(DB_NAME, tableName,
+-        "mOnTh like \"m.*\"", (short) -1);
++        "mOnTh like \"m%\"", (short) -1);
+     assertPartitionsHaveCorrectValues(partitions, testValues.subList(0, 4));
+ 
+     partitions = client.listPartitionsByFilter(DB_NAME, tableName,
+-        "yYyY=\"2018\" AND mOnTh like \"m.*\"", (short) -1);
++        "yYyY=\"2018\" AND mOnTh like \"m%\"", (short) -1);
+     assertPartitionsHaveCorrectValues(partitions, testValues.subList(3, 4));
+     client.dropTable(DB_NAME, tableName);
+   }
+@@ -853,7 +853,7 @@ public void testListPartitionsByFilterCaseSensitive() throws Exception {
+     assertPartitionsHaveCorrectValues(partitions, testValues.subList(0, 3));
+ 
+     partitions = client.listPartitionsByFilter(DB_NAME, tableName,
+-        "month like \"M.*\"", (short) -1);
++        "month like \"M%\"", (short) -1);
+     Assert.assertTrue(partitions.isEmpty());
+     client.dropTable(DB_NAME, tableName);
+ 
+-- 
+1.8.3.1
+
