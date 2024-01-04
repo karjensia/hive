@@ -1,0 +1,36 @@
+From f1e59e9c905322db7062df6539edee73e5de25ca Mon Sep 17 00:00:00 2001
+From: Marta Kuczora <kuczoram@cloudera.com>
+Date: Tue, 22 Oct 2019 10:57:35 +0200
+Subject: [PATCH 2372/5664] HIVE-22375:
+ ObjectStore.lockNotificationSequenceForUpdate is leaking query in case of
+ error (Marta Kuczora reviewed by Peter Vary)
+
+---
+ .../java/org/apache/hadoop/hive/metastore/ObjectStore.java    | 11 +++++++----
+ 1 file changed, 7 insertions(+), 4 deletions(-)
+
+diff --git a/standalone-metastore/metastore-server/src/main/java/org/apache/hadoop/hive/metastore/ObjectStore.java b/standalone-metastore/metastore-server/src/main/java/org/apache/hadoop/hive/metastore/ObjectStore.java
+index 50e240e..e41c968 100644
+--- a/standalone-metastore/metastore-server/src/main/java/org/apache/hadoop/hive/metastore/ObjectStore.java
++++ b/standalone-metastore/metastore-server/src/main/java/org/apache/hadoop/hive/metastore/ObjectStore.java
+@@ -10001,10 +10001,13 @@ private void lockNotificationSequenceForUpdate() throws MetaException {
+       new RetryingExecutor(conf, () -> {
+         prepareQuotes();
+         Query query = pm.newQuery("javax.jdo.query.SQL", lockingQuery);
+-        query.setUnique(true);
+-        // only need to execute it to get db Lock
+-        query.execute();
+-        query.closeAll();
++        try {
++          query.setUnique(true);
++          // only need to execute it to get db Lock
++          query.execute();
++        } finally {
++          query.closeAll();
++        }
+       }).run();
+     }
+   }
+-- 
+1.8.3.1
+
