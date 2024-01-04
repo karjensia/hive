@@ -1,0 +1,28 @@
+From 4909ba369cc331a1b490e23b73cbb2cb43f29bd9 Mon Sep 17 00:00:00 2001
+From: dengzhhu653 <dengzhhu653@gmail.com>
+Date: Thu, 17 Jun 2021 12:53:02 +0800
+Subject: [PATCH 0530/2013] HIVE-25261: RetryingHMSHandler should wrap the
+ MetaException with short description of the target (Zhihua Deng reviewed by
+ Stamatis Zampetakis)
+
+Closes #2405
+---
+ .../main/java/org/apache/hadoop/hive/metastore/RetryingHMSHandler.java  | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/standalone-metastore/metastore-server/src/main/java/org/apache/hadoop/hive/metastore/RetryingHMSHandler.java b/standalone-metastore/metastore-server/src/main/java/org/apache/hadoop/hive/metastore/RetryingHMSHandler.java
+index 17ba8f8..169ac02 100644
+--- a/standalone-metastore/metastore-server/src/main/java/org/apache/hadoop/hive/metastore/RetryingHMSHandler.java
++++ b/standalone-metastore/metastore-server/src/main/java/org/apache/hadoop/hive/metastore/RetryingHMSHandler.java
+@@ -206,7 +206,7 @@ public Result invokeInternal(final Object proxy, final Method method, final Obje
+ 
+       if (retryCount >= retryLimit) {
+         LOG.error("HMSHandler Fatal error: " + ExceptionUtils.getStackTrace(caughtException));
+-        MetaException me = new MetaException(caughtException.getMessage());
++        MetaException me = new MetaException(caughtException.toString());
+         me.initCause(caughtException);
+         throw me;
+       }
+-- 
+1.8.3.1
+
