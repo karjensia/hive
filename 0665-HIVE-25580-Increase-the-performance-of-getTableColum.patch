@@ -1,0 +1,110 @@
+From 2d923cbd38fff830cde31d7b643a8c28d775379f Mon Sep 17 00:00:00 2001
+From: pvary <pvary@cloudera.com>
+Date: Mon, 11 Oct 2021 13:23:09 +0200
+Subject: [PATCH 0665/2013] HIVE-25580: Increase the performance of
+ getTableColumnStatistics and getPartitionColumnStatistics (Peter Vary
+ reviewed by David Mollitor and Zoltan Haindrich) (#2692)
+
+---
+ .../apache/hadoop/hive/metastore/ObjectStore.java  |  8 +++--
+ .../hadoop/hive/metastore/TestObjectStore.java     | 35 ++++++++++++++++++----
+ 2 files changed, 35 insertions(+), 8 deletions(-)
+
+diff --git a/standalone-metastore/metastore-server/src/main/java/org/apache/hadoop/hive/metastore/ObjectStore.java b/standalone-metastore/metastore-server/src/main/java/org/apache/hadoop/hive/metastore/ObjectStore.java
+index 164cd5b..590884c 100644
+--- a/standalone-metastore/metastore-server/src/main/java/org/apache/hadoop/hive/metastore/ObjectStore.java
++++ b/standalone-metastore/metastore-server/src/main/java/org/apache/hadoop/hive/metastore/ObjectStore.java
+@@ -9848,8 +9848,10 @@ public void validateTableCols(Table table, List<String> colNames) throws MetaExc
+     try {
+       openTransaction();
+       query = pm.newQuery(MTableColumnStatistics.class);
++      query.setFilter("tableName == t1 && dbName == t2 && catName == t3");
++      query.declareParameters("java.lang.String t1, java.lang.String t2, java.lang.String t3");
+       query.setResult("DISTINCT engine");
+-      Collection names = (Collection) query.execute();
++      Collection names = (Collection) query.execute(tableName, dbName, catName);
+       List<String> engines = new ArrayList<>();
+       for (Iterator i = names.iterator(); i.hasNext();) {
+         engines.add((String) i.next());
+@@ -9954,8 +9956,10 @@ protected ColumnStatistics getJdoResult(GetHelper<ColumnStatistics> ctx) throws
+     try {
+       openTransaction();
+       query = pm.newQuery(MPartitionColumnStatistics.class);
++      query.setFilter("tableName == t1 && dbName == t2 && catName == t3");
++      query.declareParameters("java.lang.String t1, java.lang.String t2, java.lang.String t3");
+       query.setResult("DISTINCT engine");
+-      Collection names = (Collection) query.execute();
++      Collection names = (Collection) query.execute(tableName, dbName, catName);
+       List<String> engines = new ArrayList<>();
+       for (Iterator i = names.iterator(); i.hasNext();) {
+         engines.add((String) i.next());
+diff --git a/standalone-metastore/metastore-server/src/test/java/org/apache/hadoop/hive/metastore/TestObjectStore.java b/standalone-metastore/metastore-server/src/test/java/org/apache/hadoop/hive/metastore/TestObjectStore.java
+index bcfac9d..379dcba 100644
+--- a/standalone-metastore/metastore-server/src/test/java/org/apache/hadoop/hive/metastore/TestObjectStore.java
++++ b/standalone-metastore/metastore-server/src/test/java/org/apache/hadoop/hive/metastore/TestObjectStore.java
+@@ -24,7 +24,6 @@
+ import org.apache.hadoop.hive.metastore.ObjectStore.RetryingExecutor;
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.hive.metastore.annotation.MetastoreUnitTest;
+-import org.apache.hadoop.hive.metastore.api.BooleanColumnStatsData;
+ import org.apache.hadoop.hive.metastore.api.Catalog;
+ import org.apache.hadoop.hive.metastore.api.ColumnStatistics;
+ import org.apache.hadoop.hive.metastore.api.ColumnStatisticsData;
+@@ -44,6 +43,7 @@
+ import org.apache.hadoop.hive.metastore.api.InvalidObjectException;
+ import org.apache.hadoop.hive.metastore.api.ListPackageRequest;
+ import org.apache.hadoop.hive.metastore.api.ListStoredProcedureRequest;
++import org.apache.hadoop.hive.metastore.api.LongColumnStatsData;
+ import org.apache.hadoop.hive.metastore.api.MetaException;
+ import org.apache.hadoop.hive.metastore.api.NoSuchObjectException;
+ import org.apache.hadoop.hive.metastore.api.NotificationEvent;
+@@ -602,6 +602,28 @@ public void testDirectSQLDropParitionsCleanup() throws Exception {
+     checkBackendTableSize("SERDES", 1); // Table has a serde
+   }
+ 
++  @Test
++  public void testGetPartitionStatistics() throws Exception {
++    createPartitionedTable(true, true);
++
++    List<List<ColumnStatistics>> stat;
++    try (AutoCloseable c = deadline()) {
++      stat = objectStore.getPartitionColumnStatistics(DEFAULT_CATALOG_NAME, DB1, TABLE1,
++              Arrays.asList("test_part_col=a0", "test_part_col=a1", "test_part_col=a2"),
++              Arrays.asList("test_part_col"));
++    }
++
++    Assert.assertEquals(1, stat.size());
++    Assert.assertEquals(3, stat.get(0).size());
++    Assert.assertEquals(ENGINE, stat.get(0).get(0).getEngine());
++    Assert.assertEquals(1, stat.get(0).get(0).getStatsObj().size());
++    Assert.assertTrue(stat.get(0).get(0).getStatsObj().get(0).getStatsData().isSetLongStats());
++    Assert.assertEquals(1, stat.get(0).get(0).getStatsObj().get(0).getStatsData().getLongStats().getNumNulls());
++    Assert.assertEquals(2, stat.get(0).get(0).getStatsObj().get(0).getStatsData().getLongStats().getNumDVs());
++    Assert.assertEquals(3, stat.get(0).get(0).getStatsObj().get(0).getStatsData().getLongStats().getLowValue());
++    Assert.assertEquals(4, stat.get(0).get(0).getStatsObj().get(0).getStatsData().getLongStats().getHighValue());
++  }
++
+   /**
+    * Creates DB1 database, TABLE1 table with 3 partitions.
+    * @param withPrivileges Should we create privileges as well
+@@ -683,11 +705,12 @@ private void createPartitionedTable(boolean withPrivileges, boolean withStatisti
+         stats.setEngine(ENGINE);
+ 
+         ColumnStatisticsData data = new ColumnStatisticsData();
+-        BooleanColumnStatsData boolStats = new BooleanColumnStatsData();
+-        boolStats.setNumTrues(0);
+-        boolStats.setNumFalses(0);
+-        boolStats.setNumNulls(0);
+-        data.setBooleanStats(boolStats);
++        LongColumnStatsData longStats = new LongColumnStatsData();
++        longStats.setNumNulls(1);
++        longStats.setNumDVs(2);
++        longStats.setLowValue(3);
++        longStats.setHighValue(4);
++        data.setLongStats(longStats);
+ 
+         ColumnStatisticsObj partStats = new ColumnStatisticsObj("test_part_col", "int", data);
+         statsObjList.add(partStats);
+-- 
+1.8.3.1
+
