@@ -1,0 +1,152 @@
+From c6d78ef6c9845ec5b55e40d618b40de7b5bfcb14 Mon Sep 17 00:00:00 2001
+From: Zhou Fang <zhoufang@google.com>
+Date: Sat, 4 Sep 2021 22:01:41 -0700
+Subject: [PATCH 0601/2013] HIVE-25277: fix slow partition deletion issue by
+ removing duplicated isEmpty checks (#2421)
+
+---
+ .../apache/hadoop/hive/metastore/HMSHandler.java   | 77 ++++++++++++++++++----
+ 1 file changed, 63 insertions(+), 14 deletions(-)
+
+diff --git a/standalone-metastore/metastore-server/src/main/java/org/apache/hadoop/hive/metastore/HMSHandler.java b/standalone-metastore/metastore-server/src/main/java/org/apache/hadoop/hive/metastore/HMSHandler.java
+index 2e2fc93..c3046bd 100644
+--- a/standalone-metastore/metastore-server/src/main/java/org/apache/hadoop/hive/metastore/HMSHandler.java
++++ b/standalone-metastore/metastore-server/src/main/java/org/apache/hadoop/hive/metastore/HMSHandler.java
+@@ -89,6 +89,7 @@
+ import java.util.Map;
+ import java.util.Objects;
+ import java.util.Optional;
++import java.util.PriorityQueue;
+ import java.util.Set;
+ import java.util.concurrent.ConcurrentHashMap;
+ import java.util.concurrent.ExecutionException;
+@@ -5140,10 +5141,8 @@ private boolean isDatabaseRemote(String name) {
+ 
+   private void deleteParentRecursive(Path parent, int depth, boolean mustPurge, boolean needRecycle)
+       throws IOException, MetaException {
+-    if (depth > 0 && parent != null && wh.isWritable(parent)) {
+-      if (wh.isDir(parent) && wh.isEmptyDir(parent)) {
+-        wh.deleteDir(parent, true, mustPurge, needRecycle);
+-      }
++    if (depth > 0 && parent != null && wh.isWritable(parent) && wh.isEmptyDir(parent)) {
++      wh.deleteDir(parent, true, mustPurge, needRecycle);
+       deleteParentRecursive(parent.getParent(), depth - 1, mustPurge, needRecycle);
+     }
+   }
+@@ -5156,13 +5155,34 @@ public boolean drop_partition(final String db_name, final String tbl_name,
+         null);
+   }
+ 
+-  private static class PathAndPartValSize {
+-    PathAndPartValSize(Path path, int partValSize) {
++  /** Stores a path and its size. */
++  private static class PathAndDepth implements Comparable<PathAndDepth> {
++    final Path path;
++    final int depth;
++
++    public PathAndDepth(Path path, int depth) {
+       this.path = path;
+-      this.partValSize = partValSize;
++      this.depth = depth;
++    }
++
++    @Override
++    public int hashCode() {
++      return Objects.hash(path.hashCode(), depth);
++    }
++
++    @Override
++    public boolean equals(Object o) {
++      if (this == o) return true;
++      if (o == null || getClass() != o.getClass()) return false;
++      PathAndDepth that = (PathAndDepth) o;
++      return depth == that.depth && Objects.equals(path, that.path);
++    }
++
++    /** The largest {@code depth} is processed first in a {@link PriorityQueue}. */
++    @Override
++    public int compareTo(PathAndDepth o) {
++      return o.depth - depth;
+     }
+-    public Path path;
+-    int partValSize;
+   }
+ 
+   @Override
+@@ -5175,7 +5195,7 @@ public DropPartitionsResult drop_partitions_req(
+     boolean deleteData = request.isSetDeleteData() && request.isDeleteData();
+     boolean ignoreProtection = request.isSetIgnoreProtection() && request.isIgnoreProtection();
+     boolean needResult = !request.isSetNeedResult() || request.isNeedResult();
+-    List<PathAndPartValSize> dirsToDelete = new ArrayList<>();
++    List<PathAndDepth> dirsToDelete = new ArrayList<>();
+     List<Path> archToDelete = new ArrayList<>();
+     EnvironmentContext envContext = request.isSetEnvironmentContext()
+         ? request.getEnvironmentContext() : null;
+@@ -5262,7 +5282,7 @@ public DropPartitionsResult drop_partitions_req(
+         if ((part.getSd() != null) && (part.getSd().getLocation() != null)) {
+           Path partPath = new Path(part.getSd().getLocation());
+           verifyIsWritablePath(partPath);
+-          dirsToDelete.add(new PathAndPartValSize(partPath, part.getValues().size()));
++          dirsToDelete.add(new PathAndDepth(partPath, part.getValues().size()));
+         }
+       }
+ 
+@@ -5292,16 +5312,38 @@ public DropPartitionsResult drop_partitions_req(
+         for (Path path : archToDelete) {
+           wh.deleteDir(path, true, mustPurge, needsCm);
+         }
+-        for (PathAndPartValSize p : dirsToDelete) {
++
++        // Uses a priority queue to delete the parents of deleted directories if empty.
++        // Parents with the deepest path are always processed first. It guarantees that the emptiness
++        // of a parent won't be changed once it has been processed. So duplicated processing can be
++        // avoided.
++        PriorityQueue<PathAndDepth> parentsToDelete = new PriorityQueue<>();
++        for (PathAndDepth p : dirsToDelete) {
+           wh.deleteDir(p.path, true, mustPurge, needsCm);
++          addParentForDel(parentsToDelete, p);
++        }
++
++        HashSet<PathAndDepth> processed = new HashSet<>();
++        while (!parentsToDelete.isEmpty()) {
+           try {
+-            deleteParentRecursive(p.path.getParent(), p.partValSize - 1, mustPurge, needsCm);
++            PathAndDepth p = parentsToDelete.poll();
++            if (processed.contains(p)) {
++              continue;
++            }
++            processed.add(p);
++
++            Path path = p.path;
++            if (wh.isWritable(path) && wh.isEmptyDir(path)) {
++              wh.deleteDir(path, true, mustPurge, needsCm);
++              addParentForDel(parentsToDelete, p);
++            }
+           } catch (IOException ex) {
+-            LOG.warn("Error from deleteParentRecursive", ex);
++            LOG.warn("Error from recursive parent deletion", ex);
+             throw new MetaException("Failed to delete parent: " + ex.getMessage());
+           }
+         }
+       }
++
+       if (parts != null) {
+         if (parts != null && !parts.isEmpty() && !listeners.isEmpty()) {
+             MetaStoreListenerNotifier.notifyEvent(listeners,
+@@ -5314,6 +5356,13 @@ public DropPartitionsResult drop_partitions_req(
+     }
+   }
+ 
++  private static void addParentForDel(PriorityQueue<PathAndDepth> parentsToDelete, PathAndDepth p) {
++    Path parent = p.path.getParent();
++    if (parent != null && p.depth - 1 > 0) {
++      parentsToDelete.add(new PathAndDepth(parent, p.depth - 1));
++    }
++  }
++
+   private void verifyIsWritablePath(Path dir) throws MetaException {
+     try {
+       if (!wh.isWritable(dir.getParent())) {
+-- 
+1.8.3.1
+
