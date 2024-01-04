@@ -1,0 +1,29 @@
+From 86096b48f8ead2f228725c49953c60b2f852174b Mon Sep 17 00:00:00 2001
+From: Aihua Xu <aihuaxu@apache.org>
+Date: Wed, 8 Aug 2018 18:37:54 -0700
+Subject: [PATCH 1208/5664] HIVE-20345: Drop database may hang if the tables
+ get deleted from a different call (Aihua Xu, reviewed by Naveen Gangam)
+
+---
+ .../src/main/java/org/apache/hadoop/hive/metastore/HiveMetaStore.java | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/standalone-metastore/metastore-server/src/main/java/org/apache/hadoop/hive/metastore/HiveMetaStore.java b/standalone-metastore/metastore-server/src/main/java/org/apache/hadoop/hive/metastore/HiveMetaStore.java
+index 95b08eb..324035a 100644
+--- a/standalone-metastore/metastore-server/src/main/java/org/apache/hadoop/hive/metastore/HiveMetaStore.java
++++ b/standalone-metastore/metastore-server/src/main/java/org/apache/hadoop/hive/metastore/HiveMetaStore.java
+@@ -1573,9 +1573,9 @@ private void drop_database_core(RawStore ms, String catName,
+               drop_table(MetaStoreUtils.prependCatalogToDbName(table.getCatName(), table.getDbName(), conf),
+                   table.getTableName(), false);
+             }
+-
+-            startIndex = endIndex;
+           }
++
++          startIndex = endIndex;
+         }
+ 
+         if (ms.dropDatabase(catName, name)) {
+-- 
+1.8.3.1
+
