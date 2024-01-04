@@ -1,0 +1,34 @@
+From 136e0eb4daa6b28b37e0f7935079c422a6349385 Mon Sep 17 00:00:00 2001
+From: David Mollitor <dmollitor@apache.org>
+Date: Mon, 4 Nov 2019 09:55:29 -0500
+Subject: [PATCH 2402/5664] =?UTF-8?q?HIVE-22427:=20PersistenceManagerProvi?=
+ =?UTF-8?q?der=20Logs=20a=20Warning=20About=20datanucleus.autoStartMechani?=
+ =?UTF-8?q?smMode=20(David=20Mollitor,=20reviewed=20by=20L=C3=A1szl=C3=B3?=
+ =?UTF-8?q?=20Bodor)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ .../org/apache/hadoop/hive/metastore/PersistenceManagerProvider.java | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/standalone-metastore/metastore-server/src/main/java/org/apache/hadoop/hive/metastore/PersistenceManagerProvider.java b/standalone-metastore/metastore-server/src/main/java/org/apache/hadoop/hive/metastore/PersistenceManagerProvider.java
+index 084ae83..7e9522b 100644
+--- a/standalone-metastore/metastore-server/src/main/java/org/apache/hadoop/hive/metastore/PersistenceManagerProvider.java
++++ b/standalone-metastore/metastore-server/src/main/java/org/apache/hadoop/hive/metastore/PersistenceManagerProvider.java
+@@ -483,6 +483,11 @@ private static void correctAutoStartMechanism(Configuration conf) {
+     final String autoStartKey = "datanucleus.autoStartMechanismMode";
+     final String autoStartIgnore = "ignored";
+     String currentAutoStartVal = conf.get(autoStartKey);
++    if (currentAutoStartVal == null) {
++      LOG.info("Configuration {} is not set. Defaulting to '{}'", autoStartKey,
++          autoStartIgnore);
++      currentAutoStartVal = autoStartIgnore;
++    }
+     if (!autoStartIgnore.equalsIgnoreCase(currentAutoStartVal)) {
+       LOG.warn("{} is set to unsupported value {} . Setting it to value: {}", autoStartKey,
+           conf.get(autoStartKey), autoStartIgnore);
+-- 
+1.8.3.1
+
